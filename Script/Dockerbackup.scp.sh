@@ -1,0 +1,56 @@
+#!/bin/bash
+
+backup_dir="/home/admin/backup/backup.dir"
+log_dir="/home/admin/log/log.dir"
+max_log_size=40  # in megabytes
+max_log_files=4
+server2_address="user@server2:/path/to/backup/directory/"
+
+# Create backup directory if it doesn't exist
+mkdir -p "$backup_dir"
+
+# Create log directory if it doesn't exist
+mkdir -p "$log_dir"
+
+# Get current date and time
+current_date=$(date +"%Y-%m-%d")
+current_time=$(date +"%H:%M")
+
+# Log the current date and time
+echo "[$current_date $current_time] Backup script started." >> "$log_dir/backup.log"
+
+# Backup containers and create images
+docker ps -q | while read -r container_id; do
+    container_name=$(docker inspect -f '{{.Name}}' "$container_id" | sed 's/^\///')
+    image_name="$backup_dir/$container_name-$current_date.tar"
+    docker commit "$container_id" "$container_name"
+    docker save -o "$image_name" "$container_name"
+    echo "[$current_date $current_time] Backup created for container: $container_name" >> "$log_dir/backup.log"
+    scp "$image_name" "$server2_address"
+    echo "[$current_date $current_time] Backup file transferred to server2: $container_name" >> "$log_dir/backup.log"
+done
+
+# Delete old backup files if more than 24 exist
+backup_count=$(find "$backup_dir" -maxdepth 1 -type f -name '*.tar' | wc -l)
+if [ "$backup_count" -gt 24 ]; then
+    oldest_files=$(find "$backup_dir" -maxdepth 1 -type f -name '*.tar' -printf '%T+ %p\n' | sort | head -n "$((backup_count - 24))" | awk '{print $2}')
+    rm $oldest_files
+    echo "[$current_date $current_time] Old backup files deleted." >> "$log_dir/backup.log"
+fi
+
+# Check log file size and compress if it exceeds the maximum size
+log_size=$(du -m "$log_dir/backup.log" | awk '{print $1}')
+if [ "$log_size" -gt "$max_log_size" ]; then
+    gzip "$log_dir/backup.log"
+    echo "[$current_date $current_time] Log file compressed." >> "$log_dir/backup.log"
+fi
+
+# Delete old log files if more than the maximum number exists
+log_files_count=$(find "$log_dir" -maxdepth 1 -type f -name '*.log.gz' | wc -l)
+if [ "$log_files_count" -gt "$max_log_files" ]; then
+    oldest_log_files=$(find "$log_dir" -maxdepth 1 -type f -name '*.log.gz' -printf '%T+ %p\n' | sort | head -n "$((log_files_count - max_log_files))" | awk '{print $2}')
+    rm $oldest_log_files
+fi
+
+# Log script completion
+echo "[$current_date $current_time] Backup script completed." >> "$log_dir/backup.log"
